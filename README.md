@@ -1,6 +1,6 @@
 # OpenClaw Review 🐅
 
-Review, accept or reject file changes proposed by your OpenClaw agent — directly in VS Code / Cursor.
+Review, accept or reject file changes proposed by your OpenClaw agent — directly in VS Code.
 
 ## How it works
 
