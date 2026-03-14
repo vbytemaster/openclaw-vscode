@@ -1,0 +1,10 @@
+{
+  "agents": [
+    "main",
+    "project-manager",
+    "backend-dev",
+    "frontend-dev",
+    "systems-dev",
+    "code-reviewer"
+  ]
+}

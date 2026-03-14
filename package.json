@@ -1,0 +1,240 @@
+{
+  "name": "openclaw-vscode",
+  "displayName": "OpenClaw VS Code",
+  "description": "Review agent changes + chat with OpenClaw from VS Code",
+  "version": "3.1.21",
+  "publisher": "vbytemaster",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "openclaw-vscode",
+          "title": "OpenClaw VS Code",
+          "icon": "$(diff)"
+        }
+      ]
+    },
+    "views": {
+      "openclaw-vscode": [
+        {
+          "id": "openclawChat",
+          "type": "webview",
+          "name": "Chat"
+        },
+        {
+          "id": "openclawChanges",
+          "name": "Pending Changes"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "openclaw-vscode.accept",
+        "title": "Accept Change",
+        "icon": "$(check)"
+      },
+      {
+        "command": "openclaw-vscode.reject",
+        "title": "Reject Change",
+        "icon": "$(close)"
+      },
+      {
+        "command": "openclaw-vscode.acceptAll",
+        "title": "Accept All Changes",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "openclaw-vscode.rejectAll",
+        "title": "Reject All Changes",
+        "icon": "$(close-all)"
+      },
+      {
+        "command": "openclaw-vscode.diff",
+        "title": "Show Diff",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "openclaw-vscode.diffHunk",
+        "title": "Show Hunk Diff",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "openclaw-vscode.acceptCurrent",
+        "title": "Accept This Change",
+        "icon": "$(check)"
+      },
+      {
+        "command": "openclaw-vscode.rejectCurrent",
+        "title": "Reject This Change",
+        "icon": "$(close)"
+      },
+      {
+        "command": "openclaw-vscode.prevHunk",
+        "title": "Previous Hunk",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "openclaw-vscode.nextHunk",
+        "title": "Next Hunk",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "openclaw-vscode.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "openclaw-vscode.showLogs",
+        "title": "OpenClaw: Show Logs",
+        "icon": "$(output)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "openclaw-vscode.acceptAll",
+          "when": "view == openclawChanges",
+          "group": "navigation@1"
+        },
+        {
+          "command": "openclaw-vscode.rejectAll",
+          "when": "view == openclawChanges",
+          "group": "navigation@2"
+        },
+        {
+          "command": "openclaw-vscode.refresh",
+          "when": "view == openclawChanges",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "openclaw-vscode.prevHunk",
+          "group": "navigation@1"
+        },
+        {
+          "command": "openclaw-vscode.nextHunk",
+          "group": "navigation@2"
+        },
+        {
+          "command": "openclaw-vscode.acceptCurrent",
+          "group": "navigation@3"
+        },
+        {
+          "command": "openclaw-vscode.rejectCurrent",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "openclaw-vscode.accept",
+          "when": "view == openclawChanges && viewItem == fileChange",
+          "group": "inline@1"
+        },
+        {
+          "command": "openclaw-vscode.reject",
+          "when": "view == openclawChanges && viewItem == fileChange",
+          "group": "inline@2"
+        },
+        {
+          "command": "openclaw-vscode.accept",
+          "when": "view == openclawChanges && viewItem == hunkChange",
+          "group": "inline@1"
+        },
+        {
+          "command": "openclaw-vscode.reject",
+          "when": "view == openclawChanges && viewItem == hunkChange",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "openclaw-vscode.acceptCurrent",
+        "key": "ctrl+shift+y",
+        "mac": "cmd+shift+y"
+      },
+      {
+        "command": "openclaw-vscode.rejectCurrent",
+        "key": "ctrl+shift+n",
+        "mac": "cmd+shift+n"
+      },
+      {
+        "command": "openclaw-vscode.nextHunk",
+        "key": "ctrl+shift+]",
+        "mac": "cmd+shift+]"
+      },
+      {
+        "command": "openclaw-vscode.prevHunk",
+        "key": "ctrl+shift+[",
+        "mac": "cmd+shift+["
+      }
+    ],
+    "configuration": {
+      "title": "OpenClaw VS Code",
+      "properties": {
+        "openclaw-vscode.pendingDir": {
+          "type": "string",
+          "default": ".openclaw/pending-changes",
+          "description": "Directory for pending change files (relative to workspace root)"
+        },
+        "openclaw-vscode.chat.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "OpenClaw Gateway host"
+        },
+        "openclaw-vscode.chat.port": {
+          "type": "number",
+          "default": 18789,
+          "description": "OpenClaw Gateway port"
+        },
+        "openclaw-vscode.chat.token": {
+          "type": "string",
+          "default": "",
+          "description": "OpenClaw Gateway auth token"
+        },
+        "openclaw-vscode.chat.agentId": {
+          "type": "string",
+          "default": "main",
+          "description": "Agent ID to chat with"
+        },
+        "openclaw-vscode.chat.sessionUser": {
+          "type": "string",
+          "default": "vscode-chat",
+          "description": "Session user ID (same value = shared session)"
+        },
+        "openclaw-vscode.chat.injectStartupContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-inject workspace context (repo, branch, review policy, skill) as system prompt on new chat"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./ && npm run -s webview:build",
+    "watch": "tsc -watch -p ./",
+    "webview:build": "tsc -p tsconfig.webview.json",
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "pending:list": "node ./scripts/list.js",
+    "pending:validate": "node ./scripts/validate.js",
+    "pending:clean": "node ./scripts/clean.js",
+    "pending:propose": "node ./scripts/propose.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.33",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.3.3"
+  }
+}
