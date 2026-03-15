@@ -2,7 +2,12 @@ function safeJson(data: any): string {
   return JSON.stringify(data).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
 }
 
-export function getChatHtml(fileState: any[] | undefined, agentId: string, scriptUri: string): string {
+export function getChatHtml(
+  fileState: any[] | undefined,
+  agentId: string,
+  scriptUri: string,
+  runtimeConfig?: { streamStartTimeoutMs?: number; streamInactivityTimeoutMs?: number }
+): string {
     /* eslint-disable */
 
     return `<!DOCTYPE html>
@@ -195,6 +200,7 @@ export function getChatHtml(fileState: any[] | undefined, agentId: string, scrip
     </div>
   </div>
 <script id="_fileState" type="application/json">${safeJson(fileState || [])}</script>
+<script id="_chatRuntimeConfig" type="application/json">${safeJson(runtimeConfig || {})}</script>
 <script type="module" src="${scriptUri}"></script>
 </body>
 </html>`;

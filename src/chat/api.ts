@@ -50,6 +50,7 @@ export function streamChatCompletion(
   opts?: {
     agentId?: string;
     sessionKey?: string;
+    timeoutMs?: number;
     onModel?: (model: string) => void;
     onDelta?: (delta: string) => void;
   }
@@ -113,6 +114,11 @@ export function streamChatCompletion(
     });
 
     request.on('error', reject);
+    if (opts?.timeoutMs && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) {
+      request.setTimeout(opts.timeoutMs, () => {
+        request.destroy(new Error(`Request timeout after ${opts.timeoutMs}ms`));
+      });
+    }
     request.write(body);
     request.end();
   });

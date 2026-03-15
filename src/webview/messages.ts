@@ -95,6 +95,22 @@ export function handleIncoming(ctx: MessagesContext, m: IncomingMessage): boolea
       }
       break;
     }
+    case 'streamFinal': {
+      const fid = m.chatId || ctx.activeChatId();
+      if (typeof m.text === 'string' && m.text.length > 0) {
+        ctx.curTextByChat[fid] = m.text;
+      }
+      if (typeof m.model === 'string' && m.model.length > 0) {
+        ctx.curModelByChat[fid] = m.model;
+      }
+      if (fid !== ctx.activeChatId()) break;
+      const fEl = ctx.curElByChat[fid];
+      if (fEl && ctx.curTextByChat[fid]) {
+        fEl.innerHTML = ctx.md(ctx.curTextByChat[fid]);
+        ctx.msgsEl.scrollTop = ctx.msgsEl.scrollHeight;
+      }
+      break;
+    }
     case 'streamEnd': {
       const eid = m.chatId || ctx.activeChatId();
       ctx.setStreaming(eid, false);

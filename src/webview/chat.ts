@@ -21,6 +21,17 @@ const sendIcon = document.getElementById('sendIcon');
 const stopIcon = document.getElementById('stopIcon');
 const statusText = document.getElementById('statusText');
 
+const runtimeConfigEl = document.getElementById('_chatRuntimeConfig');
+let runtimeConfig: { streamStartTimeoutMs?: number; streamInactivityTimeoutMs?: number } = {};
+try {
+  runtimeConfig = runtimeConfigEl ? JSON.parse(runtimeConfigEl.textContent || '{}') : {};
+} catch {
+  runtimeConfig = {};
+}
+
+const STREAM_START_TIMEOUT_MS = Math.max(15000, Number(runtimeConfig.streamStartTimeoutMs || 60000));
+const STREAM_INACTIVITY_TIMEOUT_MS = Math.max(45000, Number(runtimeConfig.streamInactivityTimeoutMs || 600000));
+
 const streamStateByChat: Record<string, boolean> = {};
 const streamWatchdogByChat: Record<string, number> = {};
 const streamStartWatchdogByChat: Record<string, number> = {};
@@ -324,7 +335,7 @@ function armStreamStartWatchdog(chatId: string): void {
       if (target) target.messages.push({ role: 'error', html: '⚠️ Стрим не стартовал.' });
     }
     saveState();
-  }, 15000);
+  }, STREAM_START_TIMEOUT_MS);
 }
 
 function armStreamWatchdog(chatId: string): void {
@@ -346,7 +357,7 @@ function armStreamWatchdog(chatId: string): void {
       }
     }
     saveState();
-  }, 45000);
+  }, STREAM_INACTIVITY_TIMEOUT_MS);
 }
 
 window.addEventListener('message', (e: MessageEvent) => {

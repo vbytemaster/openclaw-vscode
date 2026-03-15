@@ -208,7 +208,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const wsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!wsFolder) return '';
 
-    const gitRoot = this._runGit(wsFolder, 'git rev-parse --show-toplevel') || wsFolder;
+    const activeDocPath = vscode.window.activeTextEditor?.document?.uri?.fsPath;
+    const openedProjectPath = activeDocPath
+      ? (vscode.workspace.getWorkspaceFolder(vscode.Uri.file(activeDocPath))?.uri.fsPath || wsFolder)
+      : wsFolder;
+
+    const gitRoot = this._runGit(openedProjectPath, 'git rev-parse --show-toplevel') || openedProjectPath;
     const repoName = path.basename(gitRoot);
     const branch = this._runGit(gitRoot, 'git branch --show-current');
     const origin = this._runGit(gitRoot, 'git remote get-url origin');
@@ -240,19 +245,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       skillHints.push(`workspace:${path.relative(wsFolder, extensionSkill).replace(/\\/g, '/')}`);
     }
 
+    const homedir = process.env.HOME || process.env.USERPROFILE || '';
+    const requiredSkillCandidates = [
+      path.join(homedir, '.openclaw', 'workspace', 'skills', 'openclaw-vscode', 'SKILL.md'),
+      path.join(wsFolder, 'skills', 'openclaw-vscode', 'SKILL.md'),
+      path.join(openedProjectPath, 'skills', 'openclaw-vscode', 'SKILL.md'),
+    ];
+    const requiredSkillMd = requiredSkillCandidates.find((p) => fs.existsSync(p)) || requiredSkillCandidates[0];
+    const requiredSkillInstalled = fs.existsSync(requiredSkillMd);
+
     const lines = [
       'OpenClaw VS Code startup context (auto-injected):',
       `- agentId: ${agentId}`,
       `- chatId: ${chatId}`,
       `- workspaceRoot: ${wsFolder}`,
+      `- openedProjectPath: ${openedProjectPath}`,
       `- repoRoot: ${gitRoot}`,
       `- repoName: ${repoName}`,
       `- gitBranch: ${branch || 'unknown'}`,
       `- gitOrigin: ${origin || 'unknown'}`,
       `- reviewPolicyMode: ${reviewMode}`,
       `- openclawSkill: ${skillHints.length ? skillHints.join(', ') : 'not-detected'}`,
+      `- requiredSkill: openclaw-vscode`,
+      `- requiredSkillPath: ${requiredSkillMd}`,
+      `- requiredSkillCandidates: ${requiredSkillCandidates.join(' | ')}`,
+      `- requiredSkillInstalled: ${requiredSkillInstalled ? 'yes' : 'no'}`,
       '',
-      'Instruction: Use this repository/skill context as ground truth for this chat session.'
+      'Instruction: Use this repository/skill context as ground truth for this chat session.',
+      `Instruction: Prioritize file discovery and edits inside openedProjectPath=${openedProjectPath} first; do not search unrelated workspace paths unless explicitly requested.`,
+      'Instruction: You MUST use the openclaw-vscode skill and follow rules from its SKILL.md for this project/session.',
+      'Instruction: OpenClaw skills are global workspace assets (typically ~/.openclaw/workspace/skills/<skill>/SKILL.md) and may also be linked under agents/*/skills; do not assume skills live inside the opened project directory.',
+      'Instruction: Before reporting missing skill, check ALL requiredSkillCandidates and perform a quick workspace search for **/openclaw-vscode/SKILL.md.',
+      'Instruction: Only if no valid SKILL.md is found after those checks, report missing skill to the client.'
     ];
 
     return lines.join('\n');
@@ -263,6 +287,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const host = config.get<string>('chat.host', '127.0.0.1');
     const port = config.get<number>('chat.port', 18789);
     const token = config.get<string>('chat.token', '');
+    const requestTimeoutMs = config.get<number>('chat.requestTimeoutMs', 600000);
     const agentId = (agentIdOverride || this._activeAgentId || config.get<string>('chat.agentId', 'main')).trim();
     const sessionUser = config.get<string>('chat.sessionUser', 'vscode-chat');
 
@@ -314,10 +339,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const history = this._chatHistories.get(chatId) ?? [];
 
     const injectContext = vscode.workspace.getConfiguration('openclaw-vscode').get<boolean>('chat.injectStartupContext', true);
-    if (history.length === 0 && injectContext) {
-      const startupContext = this._detectWorkspaceContext(agentId, chatId);
-      if (startupContext) {
-        history.push({ role: 'system', content: startupContext });
+    if (injectContext) {
+      const hasStartupContext = history.some((m) => m.role === 'system' && typeof m.content === 'string' && m.content.includes('OpenClaw VS Code startup context (auto-injected):'));
+      const hasConversationTurns = history.some((m) => m.role === 'user' || m.role === 'assistant');
+      if (!hasStartupContext && !hasConversationTurns) {
+        const startupContext = this._detectWorkspaceContext(agentId, chatId);
+        if (startupContext) {
+          history.push({ role: 'system', content: startupContext });
+        }
       }
     }
 
@@ -366,7 +395,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     logger.info(`[chat:${chatId}] streamStart sent agent=${agentId}`);
 
     try {
-      let fullResponse = await this._streamRequest(host, port, token, body, chatId, agentId, sessionKey);
+      let fullResponse = await this._streamRequest(host, port, token, body, chatId, agentId, sessionKey, requestTimeoutMs);
       this._activeRequests.delete(chatId);
       logger.info(`[chat:${chatId}] stream completed, chars=${fullResponse.length}`);
 
@@ -392,7 +421,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           user: sessionUser,
           messages: retryMessages
         });
-        fullResponse = await this._streamRequest(host, port, token, retryBody, chatId, agentId, sessionKey);
+        fullResponse = await this._streamRequest(host, port, token, retryBody, chatId, agentId, sessionKey, requestTimeoutMs);
         this._activeRequests.delete(chatId);
         logger.info(`[chat:${chatId}] retry stream completed, attempt=${attempt}, chars=${fullResponse.length}`);
       }
@@ -407,6 +436,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       history.push({ role: 'assistant', content: fullResponse });
       this._chatHistories.set(chatId, history);
+      // Reliability: always send final assembled text to webview (in case some deltas were missed)
+      this._postMessage({ type: 'streamFinal', chatId, text: fullResponse, model: effectiveModel });
       this._postMessage({ type: 'streamEnd', chatId });
       this._cleanupImages(messageContent);
     } catch (err: any) {
@@ -567,10 +598,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return models;
   }
 
-  private _streamRequest(host: string, port: number, token: string, body: string, chatId?: string, agentId?: string, sessionKey?: string): Promise<string> {
+  private _streamRequest(host: string, port: number, token: string, body: string, chatId?: string, agentId?: string, sessionKey?: string, timeoutMs?: number): Promise<string> {
     const { request, done } = streamChatCompletion(host, port, token, body, {
       agentId,
       sessionKey,
+      timeoutMs,
       onModel: (model) => this._postMessage({ type: 'streamModel', model, chatId }),
       onDelta: (text) => this._postMessage({ type: 'streamDelta', text, chatId })
     });
@@ -652,7 +684,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const scriptUri = this._view
       ? this._view.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'out', 'webview', 'chat.js')).toString()
       : '';
-    return getChatHtml(fileState, this._activeAgentId, scriptUri);
+
+    const cfg = vscode.workspace.getConfiguration('openclaw-vscode');
+    const streamStartTimeoutMs = cfg.get<number>('chat.streamStartTimeoutMs', 60000);
+    const streamInactivityTimeoutMs = cfg.get<number>('chat.streamInactivityTimeoutMs', 600000);
+
+    return getChatHtml(fileState, this._activeAgentId, scriptUri, {
+      streamStartTimeoutMs,
+      streamInactivityTimeoutMs,
+    });
   }
 
 }
