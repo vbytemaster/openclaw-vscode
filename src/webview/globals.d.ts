@@ -11,13 +11,6 @@ declare global {
       highlight: (code: string, opts: { language: string }) => { value: string };
       highlightAuto: (code: string) => { value: string };
     };
-    onAgentChange: () => void;
-    attachFile: () => void;
-    handleAction: () => void;
-    openInEditor: (btn: HTMLElement) => void;
-    removeImage: (el: HTMLElement) => void;
-    removeEl: (el: HTMLElement) => void;
-    clearChat: () => void;
   }
 }
 

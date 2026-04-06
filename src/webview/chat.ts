@@ -1,525 +1,342 @@
-import { esc, md, prettyModelName } from './utils.js';
+import { esc, prettyModelName } from './utils.js';
+import { renderAssistantMessage } from './render.js';
 import { isChatStreaming, setStreaming as setStreamingState } from './stream.js';
 import { getActiveChat as getActiveChatFromState, updateComposerVisibility as updateComposerVisibilityState } from './state.js';
 import { renderTabs as renderTabsView } from './tabs.js';
-import { doSend as doSendComposer, handleAction as handleActionComposer } from './composer.js';
-import { addMsg as addMessage, handleIncoming } from './messages.js';
-import { restoreInitialState } from './init.js';
-import { wireInput } from './input.js';
-import type { ChatTab, ChatMessage, VsCodeApi } from './types';
+import { renderTransientThinking } from './messageRendering.js';
+import { createWebviewRuntimeState } from './state/uiRuntimeState.js';
+import { bootstrapWebview, type BootstrapResult } from './bootstrap.js';
+import { saveChatState } from './chatPersistence.js';
+import { renderActiveChatView } from './chatView.js';
+import {
+  getAgentForChat as getAgentForChatFromStore,
+  persistAssistantToChat as persistAssistantToChatStore,
+} from './state/chatStore.js';
+import type { ChatTab, ChatChangeSet, VsCodeApi } from './types.js';
+import type { WebviewDebugRequest } from './bridgeTypes.js';
+import { getWebviewDomRefs } from './domRefs.js';
+import { parseChatRuntimeConfig } from './runtimeConfig.js';
+import { createActivityDisclosureController } from './controllers/activityDisclosure.js';
+import { createComposerActions } from './controllers/composerActions.js';
+import { createMessagesContextFactory } from './controllers/messageContextFactory.js';
 
 const vsc = acquireVsCodeApi() as VsCodeApi;
-const tabsEl = document.getElementById('chatTabs') as HTMLElement;
-const msgsEl = document.getElementById('messages') as HTMLElement;
-const composerEl = document.querySelector('.composer');
-const editorEl = document.getElementById('editor') as HTMLElement;
-const agentSel = document.getElementById('agentSelect') as HTMLSelectElement | null;
-const modelSel = document.getElementById('modelSelect') as HTMLSelectElement;
-const imgStripEl = document.getElementById('imgStrip') as HTMLElement;
-const actionBtn = document.getElementById('actionBtn');
-const sendIcon = document.getElementById('sendIcon');
-const stopIcon = document.getElementById('stopIcon');
-const statusText = document.getElementById('statusText');
-
-const runtimeConfigEl = document.getElementById('_chatRuntimeConfig');
-let runtimeConfig: { streamStartTimeoutMs?: number; streamInactivityTimeoutMs?: number } = {};
-try {
-  runtimeConfig = runtimeConfigEl ? JSON.parse(runtimeConfigEl.textContent || '{}') : {};
-} catch {
-  runtimeConfig = {};
-}
+const dom = getWebviewDomRefs();
+const runtimeConfig = parseChatRuntimeConfig(dom.runtimeConfigEl);
 
 const STREAM_START_TIMEOUT_MS = Math.max(15000, Number(runtimeConfig.streamStartTimeoutMs || 60000));
 const STREAM_INACTIVITY_TIMEOUT_MS = Math.max(45000, Number(runtimeConfig.streamInactivityTimeoutMs || 600000));
 
-const streamStateByChat: Record<string, boolean> = {};
-const streamWatchdogByChat: Record<string, number> = {};
-const streamStartWatchdogByChat: Record<string, number> = {};
-const curElByChat: Record<string, HTMLDivElement | null> = {};
-const curTextByChat: Record<string, string> = {};
-const curModelByChat: Record<string, string> = {};
-let modelLabelByValue: Record<string, string> = {};
-let imgCounter = 0;
-let imageStore: Record<string, string> = {};
-let savedRange: Range | null = null;
-let msgIndex = 0;
-let chats: ChatTab[] = [{ id: 'chat-1', title: 'Chat 1', messages: [], msgIndex: 0, agentId: agentSel?.value || 'main' }];
-let activeChatId = 'chat-1';
+const runtimeState = createWebviewRuntimeState(dom.agentSel?.value || 'main');
+const {
+  streamStateByChat,
+  curElByChat,
+  assistantTurnByChat,
+  activityStateByChat,
+  activityStartedAtByChat,
+  activityCollapsedByChat,
+  activityDisclosureOpenByChat,
+  latestChangeSetByChat,
+} = runtimeState;
+let modelLabelByValue = runtimeState.modelLabelByValue;
+let imgCounter = runtimeState.imgCounter;
+let imageStore = runtimeState.imageStore;
+let savedRange = runtimeState.savedRange;
+let msgIndex = runtimeState.msgIndex;
+let chats = runtimeState.chats;
+let activeChatId = runtimeState.activeChatId;
+
+function ensureTransientContainerPlacement(): void {
+  if (dom.transientThinkingEl.parentElement !== dom.msgsEl) {
+    dom.msgsEl.appendChild(dom.transientThinkingEl);
+  }
+}
+
+function showBootstrapError(phase: string, error: unknown): void {
+  const text = error instanceof Error ? (error.stack || error.message) : String(error);
+  const escaped = esc(text || 'Unknown bootstrap error');
+  dom.msgsEl.innerHTML = `<div class="msg error">Webview bootstrap failed at ${esc(phase)}<br><br><code>${escaped}</code></div>`;
+  dom.msgsEl.style.display = 'flex';
+  dom.msgsEl.style.paddingBottom = '8px';
+  dom.transientThinkingEl.classList.remove('show');
+  if (dom.composerEl instanceof HTMLElement) {
+    dom.composerEl.style.display = 'none';
+  }
+  postWebviewDebug('bootstrap.error', { phase, error: text });
+}
+
+function postWebviewDebug(event: string, payload?: Record<string, unknown>): void {
+  const message: WebviewDebugRequest = {
+    type: 'webviewDebug',
+    event,
+    payload: payload || {},
+    activeChatId,
+    ts: Date.now(),
+  };
+  vsc.postMessage(message);
+}
 
 function getActiveChat(): ChatTab | null {
   return getActiveChatFromState(chats, activeChatId);
 }
 
 function getAgentForChat(chatId: string): string {
-  return chats.find((c) => c.id === chatId)?.agentId || 'main';
+  return getAgentForChatFromStore(chats, chatId);
 }
 
 function updateComposerVisibility(): void {
-  updateComposerVisibilityState(composerEl, chats);
+  updateComposerVisibilityState(dom.composerEl, chats);
+}
+
+function renderTransient(chatId: string): void {
+  renderTransientThinking(createMessagesContext(), chatId);
 }
 
 function setStreaming(chatId: string, on: boolean): void {
   setStreamingState(streamStateByChat, chatId, on, {
     renderTabs,
     activeChatId: () => activeChatId,
-    actionBtn,
-    sendIcon,
-    stopIcon,
-    statusText
+    actionBtn: dom.actionBtn,
+    sendIcon: dom.sendIcon,
+    stopIcon: dom.stopIcon,
+    statusText: dom.statusText,
   });
 }
+
+let closePickers: () => void = () => {};
+let syncPickerLabels: () => void = () => {};
+let refreshModelPicker: () => void = () => {};
+let refreshThinkingPicker: () => void = () => {};
+let togglePicker: (which: 'model' | 'thinking') => void = () => {};
+
+let editorRichInput: BootstrapResult['editorRichInput'];
+let streamLifecycle: BootstrapResult['streamLifecycle'];
+
+const activityDisclosure = createActivityDisclosureController({
+  activeChatId: () => activeChatId,
+  activityCollapsedByChat,
+  activityDisclosureOpenByChat,
+  rerenderTransient: renderTransient,
+});
+
+const composerActions = createComposerActions({
+  vsc,
+  editorEl: dom.editorEl,
+  imgStripEl: dom.imgStripEl,
+  modelSel: dom.modelSel,
+  thinkingSel: dom.thinkingSel,
+  agentSel: dom.agentSel,
+  msgsEl: dom.msgsEl,
+  esc,
+  isChatStreaming: (chatId) => isChatStreaming(streamStateByChat, chatId),
+  setStreaming,
+  getActiveChat,
+  activeChatId: () => activeChatId,
+  imageStore: () => imageStore,
+  resetImageStore: () => { imageStore = {}; },
+  clearChatInEditorRichInput: () => editorRichInput.clearChat(),
+  attachFileInEditorRichInput: () => editorRichInput.attachFile(),
+  armStreamStartWatchdog: (chatId) => streamLifecycle.armStreamStartWatchdog(chatId, STREAM_START_TIMEOUT_MS),
+  chats: () => chats,
+});
+
+const createMessagesContext = createMessagesContextFactory({
+  msgsEl: dom.msgsEl,
+  editorEl: dom.editorEl,
+  agentSel: dom.agentSel,
+  transientThinkingEl: dom.transientThinkingEl,
+  curElByChat,
+  assistantTurnByChat,
+  activityStateByChat,
+  activityStartedAtByChat,
+  activityCollapsedByChat,
+  activityDisclosureOpenByChat,
+  latestChangeSetByChat,
+  modelLabelByValue: () => modelLabelByValue,
+  msgIndexRef: {
+    get value() { return msgIndex; },
+    set value(v: number) { msgIndex = v; },
+  },
+  activeChatId: () => activeChatId,
+  setStreaming,
+  renderAssistant: renderAssistantMessage,
+  esc,
+  prettyModelName: (value, labels) => prettyModelName(value, labels || modelLabelByValue),
+  saveState,
+  refreshModelPicker: () => refreshModelPicker(),
+  getAgentForChat,
+  persistAssistantToChat: (
+    chatId: string,
+    raw: string,
+    model: string,
+    idx: number,
+    changeSet?: ChatChangeSet | null,
+    canRevert?: boolean,
+  ) => {
+    persistAssistantToChatStore({
+      chats,
+      chatId,
+      raw,
+      model,
+      msgIndex: idx,
+      ...(changeSet ? { changeSet } : {}),
+      ...(typeof canRevert === 'boolean' ? { canRevert } : {}),
+    });
+  },
+  insertChip: (refId, label) => editorRichInput.insertChip(refId, label),
+  restoreSelection: (range) => editorRichInput.restoreSelection(range),
+  getSavedRange: () => savedRange,
+  setSavedRange: (range) => { savedRange = range; },
+  addMsg: (role, text) => { composerActions.addMsg(role, text); },
+  clearActiveMessages: () => { dom.msgsEl.innerHTML = ''; },
+  streamLifecycleHandle: (message) => { streamLifecycle.handleStreamMessage(message); },
+  debug: postWebviewDebug,
+});
 
 function renderTabs(): void {
   renderTabsView({
     vsc,
-    tabsEl,
-    msgsEl,
-    agentSel,
+    tabsEl: dom.tabsEl,
+    msgsEl: dom.msgsEl,
+    agentSel: dom.agentSel,
     chats,
     activeChatId,
     isChatStreaming: (chatId) => isChatStreaming(streamStateByChat, chatId),
-    snapshotDomToActiveChat,
     renderActiveChat,
     saveState,
     updateComposerVisibility,
-    setActiveChatId: (v) => { activeChatId = v; },
-    setChats: (v) => { chats = v; },
+    getChats: () => chats,
+    getActiveChatId: () => activeChatId,
+    setActiveChatId: (value) => { activeChatId = value; },
+    setChats: (value) => { chats = value; },
     renderTabs,
   });
 }
 
 function renderActiveChat(): void {
-  const c = getActiveChat();
-  msgsEl.innerHTML = '';
-  if (!c) {
-    msgIndex = 0;
-    updateComposerVisibility();
-    return;
-  }
-
-  // Defensive cleanup: drop stale typing placeholders in stored state.
-  c.messages = (c.messages || []).filter((m: ChatMessage) => {
-    if (m.role !== 'assistant') return true;
-    const html = String(m.html || '').trim();
-    const raw = String(m.rawText || '').trim();
-    const looksTyping = html.includes('typing') || html === '...' || html === '<span class="typing">...</span>';
-    return raw.length > 0 || !looksTyping;
-  });
-
-  msgIndex = c.msgIndex || 0;
-  (c.messages || []).forEach((msg: ChatMessage) => {
-    const d = document.createElement('div');
-    d.className = 'msg ' + msg.role;
-    d.innerHTML = msg.html;
-    if (msg.role === 'assistant') {
-      d.dataset.rawText = msg.rawText || '';
-      d.dataset.msgIndex = msg.msgIdx || '0';
-      d.dataset.model = msg.model || '';
-
-      // Ensure metadata bar exists for restored assistant messages too (without duplicates).
-      const actionBars = d.querySelectorAll('.msg-actions');
-      if (actionBars.length > 1) {
-        for (let i = 1; i < actionBars.length; i++) actionBars[i].remove();
-      }
-      if (msg.rawText && actionBars.length === 0) {
-        const pinBar = document.createElement('div');
-        pinBar.className = 'msg-actions';
-        const modelPart = msg.model ? ('<span class="model-inline">' + esc(prettyModelName(msg.model, modelLabelByValue)) + '</span>') : '';
-        const agentPart = '<span class="model-inline">' + esc(getAgentForChat(c.id)) + '</span>';
-        pinBar.innerHTML = '<button class="pin-btn" onclick="openInEditor(this)" title="Open in editor for reference">📌 Open in Editor</button>' + agentPart + modelPart;
-        d.appendChild(pinBar);
-      }
-    }
-    msgsEl.appendChild(d);
-  });
-  msgsEl.scrollTop = msgsEl.scrollHeight;
-  if (agentSel && c.agentId) agentSel.value = c.agentId;
-  updateComposerVisibility();
-  // Sync send/stop/status controls to currently active tab stream state.
-  setStreaming(activeChatId, isChatStreaming(streamStateByChat, activeChatId));
-}
-
-function saveSelection(): Range | null {
-  const sel = window.getSelection();
-  return sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
-}
-
-function restoreSelection(range: Range | null): void {
-  if (!range) return;
-  editorEl.focus();
-  const sel = window.getSelection();
-  if (!sel) return;
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
-
-function insertNodeAtCursor(node: Node): void {
-  editorEl.focus();
-  const sel = window.getSelection();
-  if (sel && sel.rangeCount) {
-    const range = sel.getRangeAt(0);
-    range.collapse(false);
-    range.insertNode(node);
-    const space = document.createTextNode('\u00A0');
-    if (node.nextSibling) node.parentNode?.insertBefore(space, node.nextSibling);
-    else node.parentNode?.appendChild(space);
-    range.setStartAfter(space);
-    range.setEndAfter(space);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  } else {
-    editorEl.appendChild(node);
-    editorEl.appendChild(document.createTextNode('\u00A0'));
-  }
-}
-
-function insertChip(refId: string, label: string): void {
-  const chip = document.createElement('span');
-  chip.className = 'inline-chip';
-  chip.contentEditable = 'false';
-  chip.dataset.refId = refId;
-  chip.innerHTML = '<span class="ci">≡</span> ' + esc(label) + ' <span class="cx" onclick="removeEl(this.parentElement)">✕</span>';
-  insertNodeAtCursor(chip);
-}
-
-function addImageToStrip(dataUrl: string): void {
-  const id = 'img_' + (++imgCounter);
-  imageStore[id] = dataUrl;
-  const wrap = document.createElement('div');
-  wrap.className = 'strip-img';
-  wrap.dataset.imgId = id;
-  wrap.innerHTML = '<img src="' + dataUrl + '"><button class="sx" onclick="removeImage(this.parentElement)">✕</button>';
-  imgStripEl.appendChild(wrap);
-  imgStripEl.className = 'show';
-}
-
-function removeImage(el: HTMLElement): void {
-  const id = el.dataset.imgId;
-  if (id) delete imageStore[id];
-  el.remove();
-  if (!imgStripEl.children.length) imgStripEl.className = '';
-  editorEl.focus();
-}
-
-function removeEl(el: HTMLElement): void {
-  el.remove();
-  editorEl.focus();
-}
-
-function doSend(): void {
-  const chatId = activeChatId;
-  armStreamStartWatchdog(chatId);
-  doSendComposer({
-    vsc,
-    editorEl,
-    imgStripEl,
-    modelSel,
-    agentSel,
+  renderActiveChatView({
+    msgsEl: dom.msgsEl,
+    transientThinkingEl: dom.transientThinkingEl,
+    agentSel: dom.agentSel,
+    chats,
+    activeChatId,
+    modelLabelByValue,
+    getActiveChat,
+    getAgentForChat,
+    renderAssistant: renderAssistantMessage,
+    esc,
+    prettyModelName: (value, labels) => prettyModelName(value, labels || modelLabelByValue),
+    refreshModelPicker,
+    refreshThinkingPicker,
+    updateComposerVisibility,
     isChatStreaming: (chatId) => isChatStreaming(streamStateByChat, chatId),
     setStreaming,
-    getActiveChat,
-    activeChatId: () => activeChatId,
-    imageStore: () => imageStore,
-    resetImageStore: () => { imageStore = {}; },
-    addMsg,
+    hasTransientActivity: (chatId) => Object.keys(activityStateByChat[chatId] || {}).length > 0,
+    renderTransient,
+    msgIndexRef: {
+      get value() { return msgIndex; },
+      set value(v: number) { msgIndex = v; },
+    },
   });
-}
-
-function handleAction(): void {
-  handleActionComposer({
-    vsc,
-    editorEl,
-    imgStripEl,
-    modelSel,
-    agentSel,
-    isChatStreaming: (chatId) => isChatStreaming(streamStateByChat, chatId),
-    setStreaming,
-    getActiveChat,
-    activeChatId: () => activeChatId,
-    imageStore: () => imageStore,
-    resetImageStore: () => { imageStore = {}; },
-    addMsg,
-  });
-}
-
-function addMsg(role: string, text: string, chipLabels?: string[], imgPreviews?: string[]): HTMLDivElement {
-  return addMessage({ msgsEl, esc }, role, text, chipLabels, imgPreviews);
-}
-
-function openInEditor(btn: HTMLElement): void {
-  const msgEl = btn.closest('.msg') as HTMLElement | null;
-  if (!msgEl) return;
-  const rawText = msgEl.dataset.rawText || msgEl.textContent || '';
-  const idx = msgEl.dataset.msgIndex || '0';
-  vsc.postMessage({ type: 'openResponseInEditor', text: rawText, msgIndex: parseInt(idx, 10) });
-}
-
-function clearChat(): void {
-  vsc.postMessage({ type: 'clear', chatId: activeChatId });
-  msgsEl.innerHTML = '';
-  const c = getActiveChat();
-  if (c) {
-    c.messages = [];
-    c.msgIndex = 0;
-  }
-}
-
-function attachFile(): void {
-  vsc.postMessage({ type: 'attachFile' });
-}
-
-function onAgentChange(): void {
-  if (!agentSel) return;
-  const next = agentSel.value;
-  const c = getActiveChat();
-  if (c) c.agentId = next;
-  vsc.postMessage({ type: 'setAgent', agentId: next, chatId: activeChatId });
-  vsc.postMessage({ type: 'fetchModels' });
-  saveState();
-}
-
-function snapshotDomToActiveChat(): void {
-  const c = getActiveChat();
-  if (!c) return;
-
-  const rendered: ChatMessage[] = [];
-  const messageEls = msgsEl.querySelectorAll('.msg');
-  messageEls.forEach((el) => {
-    const d = el as HTMLDivElement;
-    const role = d.classList.contains('assistant') ? 'assistant' : d.classList.contains('error') ? 'error' : 'user';
-    rendered.push({
-      role,
-      html: d.innerHTML,
-      rawText: d.dataset.rawText || undefined,
-      msgIdx: d.dataset.msgIndex || undefined,
-      model: d.dataset.model || undefined,
-    });
-  });
-
-  c.messages = rendered;
-  c.msgIndex = msgIndex;
 }
 
 function saveState(): void {
-  snapshotDomToActiveChat();
-  const state = { chats, activeChatId };
-  vsc.setState(state);
-  vsc.postMessage({ type: 'saveChatState', messages: state });
+  saveChatState({
+    vsc,
+    chats,
+    activeChatId,
+  });
 }
 
-function clearStreamWatchdog(chatId: string): void {
-  const t = streamWatchdogByChat[chatId];
-  if (t) {
-    window.clearTimeout(t);
-    delete streamWatchdogByChat[chatId];
-  }
-}
+try {
+  ensureTransientContainerPlacement();
 
-function clearStreamStartWatchdog(chatId: string): void {
-  const t = streamStartWatchdogByChat[chatId];
-  if (t) {
-    window.clearTimeout(t);
-    delete streamStartWatchdogByChat[chatId];
-  }
-}
+  const closePickersRef = { current: closePickers };
+  const syncPickerLabelsRef = { current: syncPickerLabels };
+  const refreshModelPickerRef = { current: refreshModelPicker };
+  const refreshThinkingPickerRef = { current: refreshThinkingPicker };
+  const togglePickerRef = { current: togglePicker };
 
-function armStreamStartWatchdog(chatId: string): void {
-  clearStreamStartWatchdog(chatId);
-  streamStartWatchdogByChat[chatId] = window.setTimeout(() => {
-    // No streamStart arrived: mark request as failed for this chat.
-    setStreaming(chatId, false);
-    if (chatId === activeChatId) {
-      addMsg('error', '⚠️ Запрос отправлен, но стрим не стартовал. Попробуй отправить ещё раз.');
-    } else {
-      const target = chats.find((c) => c.id === chatId);
-      if (target) target.messages.push({ role: 'error', html: '⚠️ Стрим не стартовал.' });
-    }
-    saveState();
-  }, STREAM_START_TIMEOUT_MS);
-}
-
-function armStreamWatchdog(chatId: string): void {
-  clearStreamWatchdog(chatId);
-  streamWatchdogByChat[chatId] = window.setTimeout(() => {
-    setStreaming(chatId, false);
-    const el = curElByChat[chatId];
-    if (el) el.remove();
-    curElByChat[chatId] = null;
-    curTextByChat[chatId] = '';
-    curModelByChat[chatId] = '';
-
-    if (chatId === activeChatId) {
-      addMsg('error', '⚠️ Ответ не получен (таймаут). Попробуй отправить ещё раз.');
-    } else {
-      const target = chats.find((c) => c.id === chatId);
-      if (target) {
-        target.messages.push({ role: 'error', html: '⚠️ Ответ не получен (таймаут).' });
-      }
-    }
-    saveState();
-  }, STREAM_INACTIVITY_TIMEOUT_MS);
-}
-
-window.addEventListener('message', (e: MessageEvent) => {
-  const m = e.data as any;
-
-  if (m?.type === 'streamStart') {
-    clearStreamStartWatchdog(m.chatId || activeChatId);
-    armStreamWatchdog(m.chatId || activeChatId);
-  } else if (m?.type === 'streamDelta') {
-    armStreamWatchdog(m.chatId || activeChatId);
-  } else if (m?.type === 'streamEnd') {
-    clearStreamStartWatchdog(m.chatId || activeChatId);
-    clearStreamWatchdog(m.chatId || activeChatId);
-  }
-
-  if (handleIncoming({
-    msgsEl,
-    editorEl,
-    agentSel,
-    md,
+  const bootstrap = bootstrapWebview({
+    vsc,
     esc,
-    prettyModelName,
-    modelLabelByValue,
-    setStreaming,
-    activeChatId: () => activeChatId,
+    modelSel: dom.modelSel,
+    thinkingSel: dom.thinkingSel,
+    agentSel: dom.agentSel,
+    modelPickerWrap: dom.modelPickerWrap,
+    modelPickerBtn: dom.modelPickerBtn,
+    modelPickerLabel: dom.modelPickerLabel,
+    modelMenu: dom.modelMenu,
+    thinkingPickerWrap: dom.thinkingPickerWrap,
+    thinkingPickerBtn: dom.thinkingPickerBtn,
+    thinkingPickerLabel: dom.thinkingPickerLabel,
+    thinkingMenu: dom.thinkingMenu,
+    editorEl: dom.editorEl,
+    imgStripEl: dom.imgStripEl,
+    fileStateEl: dom.fileStateEl,
+    streamStartTimeoutMs: STREAM_START_TIMEOUT_MS,
+    streamInactivityTimeoutMs: STREAM_INACTIVITY_TIMEOUT_MS,
+    streamStateByChat,
     curElByChat,
-    curTextByChat,
-    curModelByChat,
-    msgIndexRef: {
-      get value() { return msgIndex; },
-      set value(v: number) { msgIndex = v; }
-    },
+    assistantTurnByChat,
+    activityStateByChat,
+    activityStartedAtByChat,
+    msgsEl: dom.msgsEl,
+    chats: () => chats,
+    activeChatId: () => activeChatId,
+    setStreaming,
+    addErrorMessage: (text) => composerActions.addMsg('error', text),
     saveState,
-    getAgentForChat,
-    persistAssistantToChat: (chatId: string, raw: string, model: string, idx: number) => {
-      const target = chats.find((c) => c.id === chatId);
-      if (!target) return;
-      // Drop stale typing placeholders captured on tab switch.
-      target.messages = target.messages.filter((m) => {
-        if (m.role !== 'assistant') return true;
-        const html = String(m.html || '').trim();
-        const hasRealText = Boolean((m.rawText || '').trim());
-        const looksTyping = html.includes('typing') || html === '...' || html === '<span class="typing">...</span>';
-        return hasRealText || !looksTyping;
-      });
-      const html = md(raw);
-      target.messages.push({
-        role: 'assistant',
-        html,
-        rawText: raw,
-        msgIdx: String(idx),
-        model,
-      });
-      target.msgIndex = idx;
-    }
-  }, m)) {
-    return;
-  }
+    createMessagesContext,
+    modelLabelByValue: () => modelLabelByValue,
+    setModelLabelByValue: (value) => { modelLabelByValue = value; },
+    closePickersRef,
+    syncPickerLabelsRef,
+    refreshModelPickerRef,
+    refreshThinkingPickerRef,
+    togglePickerRef,
+    imageStore: () => imageStore,
+    setImageStore: (value) => { imageStore = value; },
+    nextImageId: () => `img_${++imgCounter}`,
+    doSend: () => composerActions.doSend(),
+    getCurrentRawResponse: (btn) => {
+      const msgEl = btn.closest('.msg') as HTMLElement | null;
+      if (!msgEl) return null;
+      return {
+        text: msgEl.dataset.rawText || msgEl.textContent || '',
+        msgIndex: parseInt(msgEl.dataset.msgIndex || '0', 10),
+      };
+    },
+    getActiveChatId: () => activeChatId,
+    setChats: (value) => { chats = value as ChatTab[]; },
+    setActiveChatId: (value) => { activeChatId = value; },
+    renderTabs,
+    renderActiveChat,
+    saveSelection: () => editorRichInput.saveSelection(),
+    setSavedRange: (range) => { savedRange = range; },
+    addImageToStrip: (dataUrl) => editorRichInput.addImageToStrip(dataUrl),
+    attachFile: () => composerActions.attachFile(),
+    handleAction: () => composerActions.handleAction(),
+    openInEditor: (btn) => editorRichInput.openInEditor(btn),
+    removeImage: (el) => editorRichInput.removeImage(el),
+    removeEl: (el) => editorRichInput.removeEl(el),
+    clearChat: () => composerActions.clearChat(),
+    toggleActivityGroup: activityDisclosure.toggleActivityGroup,
+    toggleExecCard: activityDisclosure.toggleExecCard,
+    syncDisclosureState: activityDisclosure.syncDisclosureState,
+    applySuggestedAction: (btn) => editorRichInput.applySuggestedAction(btn),
+    copyCodeBlock: (btn) => editorRichInput.copyCodeBlock(btn),
+    copyAssistantResponse: (btn) => editorRichInput.copyAssistantResponse(btn),
+    revertLatestChange: (btn) => editorRichInput.revertLatestChange(btn),
+  });
 
-  switch (m.type) {
-    case 'userMessage':
-      saveState();
-      break;
-    case 'modelsLoaded': {
-      if (m.models && m.models.length) {
-        const curVal = modelSel.value;
-        modelSel.innerHTML = '';
-        modelLabelByValue = {};
-        m.models.forEach((mod: { value: string; label: string }) => {
-          const opt = document.createElement('option');
-          opt.value = mod.value;
-          opt.textContent = mod.label;
-          opt.title = mod.value;
-          modelLabelByValue[mod.value] = mod.label;
-          modelSel.appendChild(opt);
-        });
-        let found = false;
-        for (let i = 0; i < modelSel.options.length; i++) {
-          if (modelSel.options[i].value === curVal) {
-            modelSel.value = curVal;
-            found = true;
-            break;
-          }
-        }
-        if (!found && modelSel.options.length) modelSel.selectedIndex = 0;
-      }
-      break;
-    }
-    case 'agentsLoaded': {
-      if (m.agents && m.agents.length && agentSel) {
-        const curAgent = agentSel.value;
-        agentSel.innerHTML = '';
-        m.agents.forEach((a: string) => {
-          const opt = document.createElement('option');
-          opt.value = a;
-          opt.textContent = a;
-          agentSel.appendChild(opt);
-        });
-        const targetAgent = m.activeAgent || curAgent;
-        let foundAgent = false;
-        for (let i = 0; i < agentSel.options.length; i++) {
-          if (agentSel.options[i].value === targetAgent) {
-            agentSel.value = targetAgent;
-            foundAgent = true;
-            break;
-          }
-        }
-        if (!foundAgent && agentSel.options.length) agentSel.selectedIndex = 0;
-      }
-      break;
-    }
-    case 'agentChanged':
-      if (agentSel && m.agentId) agentSel.value = m.agentId;
-      break;
-    case 'error':
-      addMsg('error', m.text || 'Unknown error');
-      break;
-    case 'cleared':
-      if (m.chatId && m.chatId !== activeChatId) break;
-      msgsEl.innerHTML = '';
-      saveState();
-      break;
-    case 'codeRef':
-      insertChip(m.refId, m.label);
-      break;
-    case 'pasteResult':
-      restoreSelection(savedRange);
-      savedRange = null;
-      if (m.isCode) insertChip(m.refId, m.label);
-      else document.execCommand('insertText', false, m.text);
-      break;
-  }
-});
-
-Object.assign(window, {
-  onAgentChange,
-  attachFile,
-  handleAction,
-  openInEditor,
-  removeImage,
-  removeEl,
-  clearChat,
-});
-
-editorEl.focus();
-wireInput({
-  vsc,
-  editorEl,
-  saveSelection,
-  setSavedRange: (r) => { savedRange = r; },
-  addImageToStrip,
-  doSend,
-});
-vsc.postMessage({ type: 'fetchAgents' });
-vsc.postMessage({ type: 'fetchModels' });
-restoreInitialState({
-  vsc,
-  fileStateEl: document.getElementById('_fileState'),
-  agentSel,
-  setChats: (v) => { chats = v; },
-  getChats: () => chats,
-  setActiveChatId: (v) => { activeChatId = v; },
-  renderTabs,
-  renderActiveChat,
-});
+  closePickers = closePickersRef.current;
+  syncPickerLabels = syncPickerLabelsRef.current;
+  refreshModelPicker = refreshModelPickerRef.current;
+  refreshThinkingPicker = refreshThinkingPickerRef.current;
+  togglePicker = togglePickerRef.current;
+  streamLifecycle = bootstrap.streamLifecycle;
+  editorRichInput = bootstrap.editorRichInput;
+} catch (error) {
+  showBootstrapError('startup', error);
+}

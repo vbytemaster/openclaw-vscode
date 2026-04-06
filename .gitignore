@@ -1,10 +1,16 @@
 # Dependencies
 node_modules/
+package-lock.json
 
 # Build artifacts
 out/
+out-webview/
 *.vsix
 *.tgz
+
+# Generated JS emitted into source tree by local builds
+src/**/*.js
+src/**/*.js.map
 
 # Local OpenClaw runtime state
 .openclaw/

@@ -26,7 +26,7 @@ export function setStreaming(streamStateByChat: StreamState, chatId: string, on:
     actionBtn.title = 'Stop';
     sendIcon.style.display = 'none';
     stopIcon.style.display = '';
-    statusText.textContent = 'Working...';
+    statusText.textContent = '';
   } else {
     actionBtn.classList.remove('streaming');
     actionBtn.title = 'Send';

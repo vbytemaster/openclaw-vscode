@@ -1,6 +1,10 @@
 .vscode/**
 src/**
 node_modules/**
+!node_modules/ws/**
+!node_modules/@types/ws/**
+!node_modules/zod/**
+!out-webview/**
 tsconfig.json
 **/*.ts
 .openclaw/**

@@ -1,4 +1,5 @@
-import type { ChatTab, VsCodeApi } from './types';
+import type { ChatTab, VsCodeApi } from './types.js';
+import { closeChat, createChat, switchToChat } from './chatTabsController.js';
 
 type TabsContext = {
   vsc: VsCodeApi;
@@ -8,10 +9,11 @@ type TabsContext = {
   chats: ChatTab[];
   activeChatId: string;
   isChatStreaming: (chatId: string) => boolean;
-  snapshotDomToActiveChat: () => void;
   renderActiveChat: () => void;
   saveState: () => void;
   updateComposerVisibility: () => void;
+  getChats: () => ChatTab[];
+  getActiveChatId: () => string;
   setActiveChatId: (v: string) => void;
   setChats: (v: ChatTab[]) => void;
   renderTabs: () => void;
@@ -22,38 +24,17 @@ export function renderTabs(ctx: TabsContext): void {
 
   ctx.chats.forEach((c) => {
     const b = document.createElement('button');
-    b.className = 'pill';
-    b.style.opacity = c.id === ctx.activeChatId ? '1' : '0.75';
-    const dot = ctx.isChatStreaming(c.id) ? ' ●' : '';
-    b.textContent = c.title + dot;
-    b.onclick = () => {
-      ctx.snapshotDomToActiveChat();
-      ctx.setActiveChatId(c.id);
-      ctx.renderTabs();
-      ctx.renderActiveChat();
-      ctx.saveState();
-    };
+    b.className = 'chat-tab' + (c.id === ctx.activeChatId ? ' is-active' : '');
+    const dot = ctx.isChatStreaming(c.id) ? '<span class="chat-tab-dot"></span>' : '';
+    b.innerHTML = `<span class="chat-tab-label">${c.title}</span>${dot}`;
+    b.onclick = () => switchToChat(ctx, c.id);
 
     const x = document.createElement('span');
-    x.textContent = ' ×';
-    x.style.opacity = '0.7';
+    x.className = 'chat-tab-close';
+    x.textContent = '×';
     x.onclick = (e) => {
       e.stopPropagation();
-      ctx.snapshotDomToActiveChat();
-      ctx.setChats(ctx.chats.filter((it) => it.id !== c.id));
-      ctx.vsc.postMessage({ type: 'deleteChat', chatId: c.id });
-
-      if (!ctx.chats.length) {
-        ctx.setActiveChatId('');
-        ctx.msgsEl.innerHTML = '';
-      } else if (ctx.activeChatId === c.id) {
-        ctx.setActiveChatId(ctx.chats[0].id);
-        ctx.renderActiveChat();
-      }
-
-      ctx.renderTabs();
-      ctx.updateComposerVisibility();
-      ctx.saveState();
+      closeChat(ctx, c.id);
     };
 
     b.appendChild(x);
@@ -61,24 +42,9 @@ export function renderTabs(ctx: TabsContext): void {
   });
 
   const add = document.createElement('button');
-  add.className = 'pill';
+  add.className = 'chat-tab-add';
   add.textContent = '+';
-  add.onclick = () => {
-    ctx.snapshotDomToActiveChat();
-    const id = 'chat-' + (globalThis.crypto?.randomUUID?.() || (Date.now() + '-' + Math.random().toString(36).slice(2, 8)));
-    const n: ChatTab = {
-      id,
-      title: 'Chat ' + (ctx.chats.length + 1),
-      messages: [],
-      msgIndex: 0,
-      agentId: (ctx.agentSel && ctx.agentSel.value) || 'main'
-    };
-    ctx.setChats(ctx.chats.concat([n]));
-    ctx.setActiveChatId(id);
-    ctx.renderTabs();
-    ctx.renderActiveChat();
-    ctx.saveState();
-  };
+  add.onclick = () => createChat(ctx);
   ctx.tabsEl.appendChild(add);
 
   ctx.updateComposerVisibility();

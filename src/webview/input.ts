@@ -1,4 +1,4 @@
-import type { VsCodeApi } from './types';
+import type { VsCodeApi } from './types.js';
 
 type InputContext = {
   vsc: Pick<VsCodeApi, 'postMessage'>;

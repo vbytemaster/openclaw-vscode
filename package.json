@@ -1,8 +1,8 @@
 {
   "name": "openclaw-vscode",
   "displayName": "OpenClaw VS Code",
-  "description": "Review agent changes + chat with OpenClaw from VS Code",
-  "version": "3.1.21",
+  "description": "Chat with OpenClaw from VS Code",
+  "version": "4.0.77",
   "publisher": "vbytemaster",
   "engines": {
     "vscode": "^1.85.0"
@@ -11,7 +11,10 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onView:openclawChat",
+    "onCommand:openclaw-vscode.showLogs",
+    "onCommand:openclaw-vscode.testWsGateway",
+    "onCommand:openclaw-vscode.showWsDeviceInfo"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -20,7 +23,7 @@
         {
           "id": "openclaw-vscode",
           "title": "OpenClaw VS Code",
-          "icon": "$(diff)"
+          "icon": "$(comment-discussion)"
         }
       ]
     },
@@ -30,164 +33,29 @@
           "id": "openclawChat",
           "type": "webview",
           "name": "Chat"
-        },
-        {
-          "id": "openclawChanges",
-          "name": "Pending Changes"
         }
       ]
     },
     "commands": [
       {
-        "command": "openclaw-vscode.accept",
-        "title": "Accept Change",
-        "icon": "$(check)"
-      },
-      {
-        "command": "openclaw-vscode.reject",
-        "title": "Reject Change",
-        "icon": "$(close)"
-      },
-      {
-        "command": "openclaw-vscode.acceptAll",
-        "title": "Accept All Changes",
-        "icon": "$(check-all)"
-      },
-      {
-        "command": "openclaw-vscode.rejectAll",
-        "title": "Reject All Changes",
-        "icon": "$(close-all)"
-      },
-      {
-        "command": "openclaw-vscode.diff",
-        "title": "Show Diff",
-        "icon": "$(diff)"
-      },
-      {
-        "command": "openclaw-vscode.diffHunk",
-        "title": "Show Hunk Diff",
-        "icon": "$(diff)"
-      },
-      {
-        "command": "openclaw-vscode.acceptCurrent",
-        "title": "Accept This Change",
-        "icon": "$(check)"
-      },
-      {
-        "command": "openclaw-vscode.rejectCurrent",
-        "title": "Reject This Change",
-        "icon": "$(close)"
-      },
-      {
-        "command": "openclaw-vscode.prevHunk",
-        "title": "Previous Hunk",
-        "icon": "$(arrow-up)"
-      },
-      {
-        "command": "openclaw-vscode.nextHunk",
-        "title": "Next Hunk",
-        "icon": "$(arrow-down)"
-      },
-      {
-        "command": "openclaw-vscode.refresh",
-        "title": "Refresh",
-        "icon": "$(refresh)"
-      },
-      {
         "command": "openclaw-vscode.showLogs",
         "title": "OpenClaw: Show Logs",
         "icon": "$(output)"
-      }
-    ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "openclaw-vscode.acceptAll",
-          "when": "view == openclawChanges",
-          "group": "navigation@1"
-        },
-        {
-          "command": "openclaw-vscode.rejectAll",
-          "when": "view == openclawChanges",
-          "group": "navigation@2"
-        },
-        {
-          "command": "openclaw-vscode.refresh",
-          "when": "view == openclawChanges",
-          "group": "navigation@3"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "openclaw-vscode.prevHunk",
-          "group": "navigation@1"
-        },
-        {
-          "command": "openclaw-vscode.nextHunk",
-          "group": "navigation@2"
-        },
-        {
-          "command": "openclaw-vscode.acceptCurrent",
-          "group": "navigation@3"
-        },
-        {
-          "command": "openclaw-vscode.rejectCurrent",
-          "group": "navigation@4"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "openclaw-vscode.accept",
-          "when": "view == openclawChanges && viewItem == fileChange",
-          "group": "inline@1"
-        },
-        {
-          "command": "openclaw-vscode.reject",
-          "when": "view == openclawChanges && viewItem == fileChange",
-          "group": "inline@2"
-        },
-        {
-          "command": "openclaw-vscode.accept",
-          "when": "view == openclawChanges && viewItem == hunkChange",
-          "group": "inline@1"
-        },
-        {
-          "command": "openclaw-vscode.reject",
-          "when": "view == openclawChanges && viewItem == hunkChange",
-          "group": "inline@2"
-        }
-      ]
-    },
-    "keybindings": [
-      {
-        "command": "openclaw-vscode.acceptCurrent",
-        "key": "ctrl+shift+y",
-        "mac": "cmd+shift+y"
       },
       {
-        "command": "openclaw-vscode.rejectCurrent",
-        "key": "ctrl+shift+n",
-        "mac": "cmd+shift+n"
+        "command": "openclaw-vscode.testWsGateway",
+        "title": "OpenClaw: Test WS Gateway",
+        "icon": "$(plug)"
       },
       {
-        "command": "openclaw-vscode.nextHunk",
-        "key": "ctrl+shift+]",
-        "mac": "cmd+shift+]"
-      },
-      {
-        "command": "openclaw-vscode.prevHunk",
-        "key": "ctrl+shift+[",
-        "mac": "cmd+shift+["
+        "command": "openclaw-vscode.showWsDeviceInfo",
+        "title": "OpenClaw: Show WS Device Info",
+        "icon": "$(device-desktop)"
       }
     ],
     "configuration": {
       "title": "OpenClaw VS Code",
       "properties": {
-        "openclaw-vscode.pendingDir": {
-          "type": "string",
-          "default": ".openclaw/pending-changes",
-          "description": "Directory for pending change files (relative to workspace root)"
-        },
         "openclaw-vscode.chat.host": {
           "type": "string",
           "default": "127.0.0.1",
@@ -213,28 +81,58 @@
           "default": "vscode-chat",
           "description": "Session user ID (same value = shared session)"
         },
+        "openclaw-vscode.chat.requestTimeoutMs": {
+          "type": "number",
+          "default": 600000,
+          "description": "HTTP request timeout in milliseconds for chat completion stream (applies to all models)"
+        },
+        "openclaw-vscode.chat.streamStartTimeoutMs": {
+          "type": "number",
+          "default": 60000,
+          "description": "Webview watchdog timeout in milliseconds while waiting for streamStart"
+        },
+        "openclaw-vscode.chat.streamInactivityTimeoutMs": {
+          "type": "number",
+          "default": 600000,
+          "description": "Webview watchdog timeout in milliseconds between stream chunks (applies to all models)"
+        },
         "openclaw-vscode.chat.injectStartupContext": {
           "type": "boolean",
           "default": true,
-          "description": "Auto-inject workspace context (repo, branch, review policy, skill) as system prompt on new chat"
+          "description": "Auto-inject compact workspace context before the first turn in each chat"
+        },
+        "openclaw-vscode.chat.transport": {
+          "type": "string",
+          "enum": [
+            "http",
+            "ws"
+          ],
+          "default": "ws",
+          "description": "Transport backend for OpenClaw chat. WS is the primary transport; HTTP is kept as fallback/debug path."
         }
       }
     }
   },
   "scripts": {
-    "compile": "tsc -p ./ && npm run -s webview:build",
+    "compile": "tsc -p ./ && pnpm -s webview:build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "pnpm test && pnpm -s tsc -p ./ --noEmit && pnpm -s tsc -p tsconfig.webview.json --noEmit && pnpm -s compile",
     "watch": "tsc -watch -p ./",
-    "webview:build": "tsc -p tsconfig.webview.json",
-    "package": "npx @vscode/vsce package --no-dependencies",
-    "pending:list": "node ./scripts/list.js",
-    "pending:validate": "node ./scripts/validate.js",
-    "pending:clean": "node ./scripts/clean.js",
-    "pending:propose": "node ./scripts/propose.js"
+    "webview:clean": "node ./tools/clean-webview-output.mjs",
+    "webview:build": "pnpm -s webview:clean && tsc -p tsconfig.webview.json",
+    "package": "pnpm exec vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "ws": "^8.18.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20.19.33",
     "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
     "@vscode/vsce": "^3.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.2"
   }
 }

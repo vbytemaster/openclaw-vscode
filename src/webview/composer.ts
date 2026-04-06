@@ -1,10 +1,11 @@
-import type { VsCodeApi } from './types';
+import type { VsCodeApi } from './types.js';
 
 type ComposerContext = {
   vsc: VsCodeApi;
   editorEl: HTMLElement;
   imgStripEl: HTMLElement;
   modelSel: HTMLSelectElement;
+  thinkingSel: HTMLSelectElement | null;
   agentSel: HTMLSelectElement | null;
   isChatStreaming: (chatId: string) => boolean;
   setStreaming: (chatId: string, on: boolean) => void;
@@ -88,6 +89,7 @@ export function doSend(ctx: ComposerContext): void {
     refs,
     images,
     model: ctx.modelSel.value,
+    thinkingLevel: ctx.thinkingSel?.value || 'auto',
     chatId: currentChatId,
     agentId: chat.agentId || (ctx.agentSel && ctx.agentSel.value) || 'main'
   });

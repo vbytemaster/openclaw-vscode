@@ -1,4 +1,4 @@
-import type { ChatTab } from './types';
+import type { ChatTab } from './types.js';
 
 export function getActiveChat(chats: ChatTab[], activeChatId: string): ChatTab | null {
   for (const chat of chats) {
