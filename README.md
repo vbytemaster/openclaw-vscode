@@ -1,54 +1,110 @@
-# OpenClaw Review 🐅
+# OpenClaw VS Code
 
-Review, accept or reject file changes proposed by your OpenClaw agent — directly in VS Code.
+VS Code extension for chatting with an OpenClaw Gateway from a sidebar webview.
 
-## How it works
+## What It Does
 
-1. OpenClaw writes change proposals as JSON files to `.openclaw/pending-changes/`
-2. The extension watches that directory and shows pending changes in the sidebar
-3. Click a change to see an inline diff
-4. Accept ✅ or Reject ❌ each change (or all at once)
+- adds an `OpenClaw VS Code` view container to the activity bar
+- renders a chat webview in the `Chat` view
+- connects to an OpenClaw Gateway over `ws` or `http`
+- streams assistant responses and tool activity into the webview
+- supports session continuity, agent selection, and workspace context injection
 
-## Change file format
+## Requirements
 
-`.openclaw/pending-changes/<id>.json`:
+- VS Code `^1.85.0`
+- Node.js 20+
+- `pnpm`
+- a running OpenClaw Gateway
 
-```json
-{
-  "id": "fix-typo-01",
-  "file": "src/app.ts",
-  "description": "Fix typo in init function",
-  "action": "edit",
-  "oldText": "console.log(\"old\")",
-  "newText": "console.log(\"new\")",
-  "timestamp": 1708300000000
-}
-```
+## Extension Settings
 
-### Actions
+The extension contributes these settings:
 
-- **edit** — surgical find & replace (`oldText` → `newText`) or full rewrite (`fullContent`)
-- **create** — new file (`fullContent` or `newText`)
-- **delete** — remove file
+- `openclaw-vscode.chat.host`
+- `openclaw-vscode.chat.port`
+- `openclaw-vscode.chat.token`
+- `openclaw-vscode.chat.agentId`
+- `openclaw-vscode.chat.sessionUser`
+- `openclaw-vscode.chat.requestTimeoutMs`
+- `openclaw-vscode.chat.streamStartTimeoutMs`
+- `openclaw-vscode.chat.streamInactivityTimeoutMs`
+- `openclaw-vscode.chat.injectStartupContext`
+- `openclaw-vscode.chat.transport`
 
-## Install / Build
+Default transport is `ws`. `http` is kept as a fallback/debug path.
+
+## Local Development
+
+Install dependencies:
 
 ```bash
-cd openclaw-vscode
 pnpm install
-pnpm verify
-pnpm package
-# Install the .vsix in Cursor/VS Code: Extensions → ⋯ → Install from VSIX
 ```
 
-## Engineering Workflow
+Run the quality gate:
 
 ```bash
 pnpm verify
 ```
 
-Key project docs:
+Useful commands:
 
-- Architecture and repository-wide rules: `AGENTS.md`
-- Task-specific workflow rules: `processes/README.md`
-- CI runs the same local quality gate via `pnpm verify`
+```bash
+pnpm test
+pnpm test:watch
+pnpm compile
+pnpm package
+```
+
+`pnpm verify` runs:
+
+- unit tests
+- extension TypeScript typecheck
+- webview TypeScript typecheck
+- full compile
+
+## Packaging
+
+Build a VSIX:
+
+```bash
+pnpm package
+```
+
+Then install the generated `.vsix` in VS Code or Cursor via `Extensions -> ... -> Install from VSIX`.
+
+## Project Structure
+
+High-level layout:
+
+- `src/dto/`:
+  protocol boundary schemas
+- `src/chat/`:
+  application orchestration, sessions, transport/webview routing
+- `src/chat/events/`:
+  semantic event normalization
+- `src/gateway/`:
+  gateway-specific connection helpers
+- `src/webview/`:
+  webview state, view-models, controllers, rendering
+- `processes/`:
+  mandatory task-specific workflow rules
+
+## Engineering Rules
+
+Repository-wide architecture rules live in [AGENTS.md](/Users/vladimirtarnakin/.openclaw/workspace/Projects/OpenClaw/openclaw-vscode/AGENTS.md).
+
+Task-specific implementation processes live in [processes/README.md](/Users/vladimirtarnakin/.openclaw/workspace/Projects/OpenClaw/openclaw-vscode/processes/README.md).
+
+Mandatory feature flow:
+
+`Gateway DTO -> ChatEvent -> Application/Session -> Webview DTO -> Webview State -> ViewModel -> Components -> Styles`
+
+## CI
+
+GitHub Actions runs the same local quality gate through `pnpm verify`.
+
+Workflow file:
+
+- [.github/workflows/ci.yml](/Users/vladimirtarnakin/.openclaw/workspace/Projects/OpenClaw/openclaw-vscode/.github/workflows/ci.yml)
