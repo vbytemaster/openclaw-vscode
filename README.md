@@ -35,38 +35,20 @@ Review, accept or reject file changes proposed by your OpenClaw agent — direct
 
 ```bash
 cd openclaw-vscode
-./build.sh
-# or on Windows: build.bat
+pnpm install
+pnpm verify
+pnpm package
 # Install the .vsix in Cursor/VS Code: Extensions → ⋯ → Install from VSIX
 ```
 
-Manual steps (if needed):
+## Engineering Workflow
 
 ```bash
-npm ci
-npm run compile
-npm run package
+pnpm verify
 ```
 
-## Pending Changes tooling (for agents / CLI)
+Key project docs:
 
-This repo now contains the pending-changes scripts at:
-
-- `scripts/propose.js`
-- `scripts/list.js`
-- `scripts/validate.js`
-- `scripts/clean.js`
-
-Examples:
-
-```bash
-# List pending changes for a project
-npm run pending:list -- agents-backend
-
-# Validate pending changes
-npm run pending:validate -- agents-backend
-
-# Create a change (see SKILL.md for full options)
-node scripts/propose.js agents-backend edit \
-  --file "src/app.py" --old "a" --new "b" --desc "test"
-```
+- Architecture and repository-wide rules: `AGENTS.md`
+- Task-specific workflow rules: `processes/README.md`
+- CI runs the same local quality gate via `pnpm verify`
